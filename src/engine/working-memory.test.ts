@@ -828,6 +828,20 @@ describe('provenance cannot be forged (external review P0)', () => {
   })
 })
 
+describe('declare_hypothesis validation (self-audit #29 finding)', () => {
+  it('rejects declare_hypothesis without a predicate', () => {
+    const store = new MemorySpaceStore()
+    const space = store.createSpace({ title: 'hyp: no predicate' })
+    assert.throws(
+      () =>
+        applyWorkingMemoryOperations(store, space.id, [
+          { op: 'declare_hypothesis', id: 'H1', args: { x: 1 } } as never,
+        ]),
+      /predicate/i,
+    )
+  })
+})
+
 describe('assert_fact validation (external review P2)', () => {
   it('rejects assert_fact without a predicate instead of minting an undefined() fact', () => {
     const store = new MemorySpaceStore()

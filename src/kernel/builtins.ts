@@ -92,8 +92,14 @@ export function evaluateBuiltin(atom: PredicateAtom): boolean {
  * representation error) and is allowed.
  */
 export function computeArithmetic(predicate: string, left: SemanticScalar, right?: SemanticScalar): number | undefined {
-  const a = typeof left === 'number' ? left : Number(left)
-  if (Number.isNaN(a)) return undefined
+  // Inputs must BE numbers - no coercion. Number('')===0, Number(null)===0,
+  // Number(true)===1 all slip past an isNaN-only check and come back
+  // wearing the exactness contract they never earned (open-ended
+  // local-model review, #29 open round). Canonical numeric strings were
+  // already normalized to numbers at the working-memory boundary; whatever
+  // is still a string here is not a number, and the literal fails.
+  if (typeof left !== 'number' || Number.isNaN(left)) return undefined
+  const a = left
   if (UNARY_ARITHMETIC.has(predicate)) {
     switch (predicate) {
       case 'neg': return guardResult(-a, a)
@@ -101,8 +107,8 @@ export function computeArithmetic(predicate: string, left: SemanticScalar, right
       default: return undefined
     }
   }
-  const b = typeof right === 'number' ? right : Number(right)
-  if (right === undefined || Number.isNaN(b)) return undefined
+  if (typeof right !== 'number' || Number.isNaN(right)) return undefined
+  const b = right
   switch (predicate) {
     case 'add': return guardResult(a + b, a, b)
     case 'sub': return guardResult(a - b, a, b)

@@ -845,6 +845,7 @@ function assertValidAtoms(operation: WorkingMemoryOperation): void {
 
   switch (operation.op) {
     case 'assert_fact':
+    case 'declare_hypothesis':
     case 'revise_fact': {
       check(
         { predicate: (operation as { predicate?: unknown }).predicate, args: operation.args },

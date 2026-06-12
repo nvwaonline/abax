@@ -1,5 +1,6 @@
 import type { PredicateAtom, SpaceNode } from '../model/types.js'
 import type { SpaceStore } from '../storage/space-store.js'
+import { assertRuleSafety } from '../kernel/safety.js'
 import { logicallyUsableNodes } from './semantic-active.js'
 import { collectPredicateVocabulary, formatVocabulary } from './vocabulary.js'
 
@@ -55,10 +56,25 @@ export function seedSpace(
   store: SpaceStore,
   spaceId: string,
   capsule: ExperienceCapsule,
-): { seededAxiomIds: string[]; vocabulary: string[] } {
+): { seededAxiomIds: string[]; vocabulary: string[]; skipped: string[] } {
   const seededAxiomIds: string[] = []
+  // Capsules are an ingestion channel like any other (self-audit #29):
+  // unsafe rules must not enter (they would fail LATE, at closure time,
+  // poisoning every subsequent update), and "derived:" ids must not enter
+  // (the next recompute would silently delete them as stale derived facts).
+  const skipped: string[] = []
 
   for (const axiom of capsule.axioms) {
+    if (axiom.id.startsWith('derived:')) {
+      skipped.push(`${axiom.id}: reserved "derived:" id prefix (closure provenance)`)
+      continue
+    }
+    try {
+      assertRuleSafety({ id: axiom.id, when: axiom.when, then: axiom.then })
+    } catch (error) {
+      skipped.push(`${axiom.id}: ${String((error as Error).message).slice(0, 140)}`)
+      continue
+    }
     // Ids are scoped per space; suffix only when the target space
     // already uses the id, and skip if even that is taken.
     const id = nodeIdTaken(store, spaceId, axiom.id)
@@ -78,7 +94,7 @@ export function seedSpace(
     seededAxiomIds.push(node.id)
   }
 
-  return { seededAxiomIds, vocabulary: capsule.vocabulary }
+  return { seededAxiomIds, vocabulary: capsule.vocabulary, skipped }
 }
 
 function nodeIdTaken(store: SpaceStore, spaceId: string, nodeId: string): boolean {

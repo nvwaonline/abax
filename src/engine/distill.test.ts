@@ -60,3 +60,48 @@ describe('distillSpace / seedSpace', () => {
     )
   })
 })
+
+describe('seedSpace boundary (self-audit #29 finding)', () => {
+  it('skips unsafe and provenance-forging capsule axioms instead of planting them', () => {
+    const store = new MemorySpaceStore()
+    const space = store.createSpace({ title: 'seed target' })
+    const capsule = {
+      sourceSpaceId: 'src-1',
+      title: 'poisoned',
+      axioms: [
+        {
+          id: 'ok_rule',
+          label: 'good',
+          summary: 'fine',
+          when: [{ predicate: 'a', args: { k: '?k' } }],
+          then: [{ predicate: 'b', args: { k: '?k' } }],
+        },
+        {
+          id: 'unsafe_rule',
+          label: 'unbound head',
+          summary: 'bad',
+          when: [{ predicate: 'a', args: { k: '?k' } }],
+          then: [{ predicate: 'b', args: { k: '?other' } }],
+        },
+        {
+          id: 'derived:b|k:"x"',
+          label: 'forged id',
+          summary: 'bad',
+          when: [{ predicate: 'a', args: { k: '?k' } }],
+          then: [{ predicate: 'c', args: { k: '?k' } }],
+        },
+      ],
+      results: [],
+      vocabulary: [],
+    }
+    const seeded = seedSpace(store, space.id, capsule)
+    assert.deepEqual(seeded.seededAxiomIds, ['ok_rule'])
+    assert.equal(seeded.skipped?.length, 2)
+    assert.ok(seeded.skipped?.some((s) => /unsafe_rule/.test(s)))
+    assert.ok(seeded.skipped?.some((s) => /derived:/.test(s)))
+    // The poisoned space must still be USABLE: closure runs clean.
+    applyWorkingMemoryOperations(store, space.id, [
+      { op: 'assert_fact', id: 'F1', predicate: 'a', args: { k: 'x' } },
+    ])
+  })
+})

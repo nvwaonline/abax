@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { evaluateStratifiedClosure } from './stratify.js'
+import { computeArithmetic } from './builtins.js'
 import { validateRuleSafety } from './safety.js'
 
 describe('guarded comparison built-ins', () => {
@@ -58,5 +59,21 @@ describe('guarded comparison built-ins', () => {
       }).join('; '),
       /inverse comparison/,
     )
+  })
+})
+
+describe('arithmetic input strictness (open-review #29 finding)', () => {
+  it('refuses non-number inputs instead of coercing them to 0/1', () => {
+    // Number('')===0, Number(null)===0, Number(true)===1, Number('  ')===0:
+    // all slip past an isNaN-only check and come back looking exact -
+    // found by the open-ended local-model review round.
+    assert.equal(computeArithmetic('mul', '' as never, 5), undefined)
+    assert.equal(computeArithmetic('add', true as never, 5), undefined)
+    assert.equal(computeArithmetic('mul', '007' as never, 5), undefined)
+    assert.equal(computeArithmetic('add', 2, '3' as never), undefined)
+    assert.equal(computeArithmetic('neg', '' as never), undefined)
+    assert.equal(computeArithmetic('min', 2, true as never), undefined)
+    // and plain numbers still work exactly
+    assert.equal(computeArithmetic('mul', 9381274, 6473), 60724986602)
   })
 })
