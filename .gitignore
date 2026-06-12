@@ -1,0 +1,7 @@
+node_modules/
+dist/
+staging/
+logs/
+.mcp.json
+.claude/
+*.jsonl

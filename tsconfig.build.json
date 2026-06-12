@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": true,
+    "sourceMap": false
+  },
+  "include": [
+    "src/index.ts",
+    "src/model/**/*.ts",
+    "src/kernel/**/*.ts",
+    "src/storage/**/*.ts",
+    "src/engine/**/*.ts",
+    "src/mcp/**/*.ts"
+  ],
+  "exclude": ["src/**/*.test.ts"]
+}

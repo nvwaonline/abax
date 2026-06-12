@@ -1,0 +1,14 @@
+{
+  "name": "abax",
+  "owner": {
+    "name": "ff",
+    "email": "jiqun.qi@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "abax",
+      "source": "./",
+      "description": "External reasoning board: every claim derived, attested, or rejected. Exact arithmetic, consume/produce actions, evidence chains - for agents whose conclusions must be checkable."
+    }
+  ]
+}

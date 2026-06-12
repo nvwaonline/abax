@@ -1,0 +1,17 @@
+{
+  "name": "abax",
+  "displayName": "abax — reasoning board",
+  "description": "An external reasoning board for agents: facts, rules, and actions go on the board; the board does exact arithmetic, derives conclusions with provenance, and refuses unverifiable claims. Derived or it didn't happen.",
+  "author": {
+    "name": "ff",
+    "email": "jiqun.qi@gmail.com"
+  },
+  "license": "MIT",
+  "keywords": ["reasoning", "verification", "datalog", "working-memory", "audit", "provenance", "mcp"],
+  "mcpServers": {
+    "abax": {
+      "command": "npx",
+      "args": ["-y", "abax-mcp"]
+    }
+  }
+}

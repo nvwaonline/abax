@@ -1,0 +1,29 @@
+{
+  "name": "abax",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "An external reasoning board for LLM agents. Derived or it didn't happen. (npm package: abax-mcp)",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts",
+    "mcp": "tsx src/mcp/run.ts",
+    "verify:mcp": "tsx src/examples/mcp-smoke.ts",
+    "verify:local-model": "tsx src/examples/local-model-task.ts",
+    "verify:structured-task": "tsx src/examples/structured-reasoning-verification.ts",
+    "verify:code-review": "tsx src/examples/code-review-working-memory.ts",
+    "verify:bench-arith": "tsx src/examples/bench-arith.ts",
+    "verify:bench-audit": "tsx src/examples/bench-audit.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  }
+}
