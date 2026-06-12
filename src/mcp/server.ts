@@ -65,7 +65,7 @@ const operationSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('define_action'),
     id: z.string().optional(),
-    label: z.string(),
+    label: z.string().optional().describe('Defaults to the action name.'),
     summary: z.string().optional(),
     action: z.string(),
     preconditions: z.array(atomSchema).optional(),
@@ -113,7 +113,8 @@ const operationSchema = z.discriminatedUnion('op', [
 const PROTOCOL_NOTES = [
   'Predicate conventions: use the same predicate name and argument keys every round',
   '(check the vocabulary section of the working memory; signature mismatches return warnings).',
-  'Variables are strings starting with "?" and may only appear in rules.',
+  'Variables are strings starting with "?" - legal in rule bodies/heads and in action',
+  'preconditions/effects (effect variables must be bound by preconditions). Never in facts.',
   'Comparison built-ins eq/neq/lt/lte/gt/gte(left, right) may appear in rule bodies.',
   'Arithmetic built-ins add/sub/mul/div/mod/pow/min/max(left, right, result) and neg/abs(left, result)',
   'compute EXACT values in rule bodies and bind result - do not do arithmetic in your head, let the',

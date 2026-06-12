@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { MemorySpaceStore } from '../storage/memory-space-store.js'
 import { deriveActionEffects } from './semantic-derivation.js'
+import { applyWorkingMemoryOperations } from './working-memory.js'
 import { getLogicContext } from './logic-context.js'
 
 describe('deriveActionEffects', () => {
@@ -206,5 +207,59 @@ describe('deriveActionEffects', () => {
 
     assert.equal(result.unsatisfiedPreconditions.length, 1)
     assert.deepEqual(result.addedFactNodeIds, [])
+  })
+})
+
+describe('derived-fact evidence refresh (external review P1)', () => {
+  it('keeps a derived fact alive via an alternative derivation after its first source is consumed', () => {
+    const store = new MemorySpaceStore()
+    const space = store.createSpace({ title: 'alt support' })
+    applyWorkingMemoryOperations(store, space.id, [
+      { op: 'assert_fact', id: 'Fa', predicate: 'a', args: { k: 'x' } },
+      { op: 'assert_fact', id: 'Falt', predicate: 'alt', args: { k: 'x' } },
+      {
+        op: 'add_axiom',
+        id: 'ra',
+        label: 'a -> b',
+        when: [{ predicate: 'a', args: { k: '?k' } }],
+        then: [{ predicate: 'b', args: { k: '?k' } }],
+      },
+      {
+        op: 'add_axiom',
+        id: 'rb',
+        label: 'alt -> b',
+        when: [{ predicate: 'alt', args: { k: '?k' } }],
+        then: [{ predicate: 'b', args: { k: '?k' } }],
+      },
+      {
+        op: 'define_action',
+        id: 'eat',
+        label: 'consume a',
+        action: 'consume_a',
+        preconditions: [{ predicate: 'a', args: { k: '?k' } }],
+        effects: [{ predicate: 'a', args: { k: '?k' }, negated: true }],
+      },
+    ])
+    const before = getLogicContext(store, space.id)
+    assert.ok(before.facts.some((f) => f.atom.predicate === 'b' && f.derived))
+
+    const result = deriveActionEffects(store, space.id, 'eat')
+    assert.equal(result.applied, true)
+
+    // b still holds: alt -> b is untouched. Stale evidence pointing at the
+    // archived Fa must not hide it (usability cascades along evidenceRefs).
+    const after = getLogicContext(store, space.id)
+    assert.ok(
+      after.facts.some((f) => f.atom.predicate === 'b' && f.derived),
+      'b must survive via rb/Falt after a is consumed',
+    )
+    const bNode = store
+      .listNodes(space.id)
+      .find((n) => n.id.startsWith('derived:b'))
+    assert.ok(bNode, 'derived b node must still exist')
+    assert.ok(
+      bNode!.evidenceRefs.includes('rb') && bNode!.evidenceRefs.includes('Falt'),
+      `evidence must be refreshed to the live derivation (got ${JSON.stringify(bNode!.evidenceRefs)})`,
+    )
   })
 })

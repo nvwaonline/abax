@@ -88,7 +88,19 @@ real-model validation: [27 logged rounds](docs/real-task-log.md) of
 local models (gemma/qwen, 27B–35B class) driving the board through real
 tasks — judgment, diagnosis-and-repair, open-ended audit, stoichiometric
 reactions — each round documented with board evidence, each kernel gap
-found by a real run, exposed by a failing test, then fixed. 170+ unit
+found by a real run, exposed by a failing test, then fixed. The entire
+series ran on an AMD Strix Halo iGPU (Radeon 8060S); no discrete GPU was
+involved at any point.
+
+**Hard-arithmetic A/B** (validation round #28, seeded and reproducible —
+8-digit × 5-digit line items, 5–8 lines, exact totals, same 27B local
+model both arms): plain chat scored **0/10** (three confidently wrong
+totals, seven non-terminating DNFs at a 10-minute cap); the board arm
+scored **8/10**, every solved value closure-derived, median 3 turns.
+Across all ten problems the board never displayed a single wrong number
+— it either derived the exact value or claimed nothing. The two board
+losses were generation-level runaways, replayed clean and re-verified
+with BigInt. Fixtures: `src/examples/bench-arith.ts` (and `bench-audit.ts`). 170+ unit
 tests; CI on Linux and Windows. A/B benchmark fixtures (exact
 arithmetic, error-finding audits) ship in `src/examples/`.
 

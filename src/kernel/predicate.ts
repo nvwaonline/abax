@@ -25,6 +25,31 @@ export type RuleMatch = {
   factIds: string[]
 }
 
+/** Cap on intermediate join width (env-overridable). Atoms that each
+ * match many facts WITHOUT sharing variables multiply candidate bindings
+ * per literal (a cross product): 8 fresh-variable atoms over 8 facts is
+ * already 16.7M binding objects - found as a 4GB heap OOM in the
+ * 2026-06-12 mtp bench run. Legitimate rules pin arguments or share
+ * variables and stay orders of magnitude below this. */
+const MAX_JOIN_BINDINGS = Number(process.env.GALAXY_MAX_JOIN_BINDINGS ?? 100000)
+
+export class JoinExplosionError extends Error {
+  constructor(
+    public readonly predicate: string,
+    public readonly width: number,
+    public readonly ruleId?: string,
+  ) {
+    super(
+      `join explosion${ruleId ? ` in rule "${ruleId}"` : ''}: over ${MAX_JOIN_BINDINGS} candidate ` +
+        `bindings while matching ${predicate}. This is a cross product - multiple atoms with ` +
+        `all-fresh variables each matching many facts. Pin identifying args ` +
+        `(e.g. {"item": "coupling"} instead of {"item": "?i3"}) or reuse the same variable ` +
+        `across atoms so matches stay linked.`,
+    )
+    this.name = 'JoinExplosionError'
+  }
+}
+
 export function matchRule(rule: RuleDefinition, facts: PredicateFact[]): RuleMatch[] {
   const conditions = rule.when ?? []
   if (conditions.length === 0) return [{ bindings: {}, factIds: [] }]
@@ -32,9 +57,16 @@ export function matchRule(rule: RuleDefinition, facts: PredicateFact[]): RuleMat
   // Positive (and strong-negative) literals bind variables; evaluate
   // them before naf and built-in literals so that both are checked
   // under complete bindings, independent of how the rule was written.
-  return matchConditions(orderConditionsForMatching(conditions), facts, [
-    { bindings: {}, factIds: [] },
-  ])
+  try {
+    return matchConditions(orderConditionsForMatching(conditions), facts, [
+      { bindings: {}, factIds: [] },
+    ])
+  } catch (error) {
+    if (error instanceof JoinExplosionError && error.ruleId === undefined) {
+      throw new JoinExplosionError(error.predicate, error.width, rule.id)
+    }
+    throw error
+  }
 }
 
 /**
@@ -114,7 +146,19 @@ export function matchConditions(
 ): RuleMatch[] {
   let current = matches
   for (const condition of conditions) {
-    current = current.flatMap((match) => matchCondition(condition, facts, match))
+    // Incremental (not flatMap) so the width check fires DURING the join:
+    // with a cross product, building even one full level unchecked can
+    // already be gigabytes of binding objects.
+    const next: RuleMatch[] = []
+    for (const match of current) {
+      for (const candidate of matchCondition(condition, facts, match)) {
+        next.push(candidate)
+        if (next.length > MAX_JOIN_BINDINGS) {
+          throw new JoinExplosionError(condition.predicate, next.length)
+        }
+      }
+    }
+    current = next
     if (current.length === 0) break
   }
   return current
@@ -284,7 +328,10 @@ export function atomEquals(left: PredicateAtom, right: PredicateAtom): boolean {
 export function atomKey(atom: PredicateAtom): string {
   const args = Object.entries(atom.args ?? {})
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}:${String(value)}`)
+    // JSON encoding keeps types apart: true vs "true", 1 vs "1" are
+    // DIFFERENT atoms (external review P1 - String() collapsed them, so a
+    // boolean goal could be satisfied by a string assertion).
+    .map(([key, value]) => `${key}:${JSON.stringify(value) ?? String(value)}`)
     .join('|')
   return `${atom.negated === true ? 'not:' : ''}${atom.predicate}|${args}`
 }

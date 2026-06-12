@@ -146,6 +146,7 @@ export function applyWorkingMemoryOperations(
     assertKnownOperation(operation)
     assertNoBuiltinAssertion(operation)
     assertValidAtoms(operation)
+    assertNoForgedProvenance(operation)
     assertNoStrictPlaceholders(operation)
     assertValidNodeReference(operation)
     assertFreshNodeId(operation, existingIds, removedInBatch, newIdsInBatch)
@@ -798,6 +799,33 @@ function normalizeOperationScalars(operation: WorkingMemoryOperation): WorkingMe
   }
 }
 
+/** Provenance markers the board assigns; user ops may not claim them.
+ * (External review P0: assert_fact with summary "Rule-derived fact: ..."
+ * passed isDerivedFactNode and sailed through the record_result gate.) */
+const RESERVED_SUMMARY_PREFIXES = ['Rule-derived fact:', 'Derived fact:', 'Action-effect fact:']
+
+function assertNoForgedProvenance(operation: WorkingMemoryOperation): void {
+  const id = (operation as { id?: unknown }).id
+  if (typeof id === 'string' && id.startsWith('derived:')) {
+    throw new Error(
+      `${operation.op}: "derived:" is a reserved id prefix - closure provenance is assigned by ` +
+        `the board, never claimed. Use a plain id (e.g. "F1"); if you want the fact DERIVED, ` +
+        `add a rule and let the closure produce it.`,
+    )
+  }
+  const summary = (operation as { summary?: unknown }).summary
+  if (typeof summary === 'string') {
+    const forged = RESERVED_SUMMARY_PREFIXES.find((prefix) => summary.startsWith(prefix))
+    if (forged !== undefined) {
+      throw new Error(
+        `${operation.op}: summary may not start with "${forged}" - that is a reserved provenance ` +
+          `marker the board assigns. Describe the node in your own words; derivation status comes ` +
+          `from the closure, not from labels.`,
+      )
+    }
+  }
+}
+
 const ATOM_SHAPE_HINT =
   'each atom must be an object like {"predicate":"at","args":{"object":"car","location":"home"}}'
 
@@ -816,6 +844,14 @@ function assertValidAtoms(operation: WorkingMemoryOperation): void {
   }
 
   switch (operation.op) {
+    case 'assert_fact':
+    case 'revise_fact': {
+      check(
+        { predicate: (operation as { predicate?: unknown }).predicate, args: operation.args },
+        'predicate',
+      )
+      return
+    }
     case 'declare_goal': {
       if (!Array.isArray(operation.desired) || operation.desired.length === 0) {
         throw new Error(`declare_goal.desired must be a non-empty atom array; ${ATOM_SHAPE_HINT}`)

@@ -76,9 +76,26 @@ export function applySemanticRules(
   const addedFactNodeIds: string[] = []
   const appliedRuleNodeIds = new Set<string>()
 
+  const nodesById = indexNodesById(nodes)
   for (const [nodeId, derivation] of desired) {
     appliedRuleNodeIds.add(derivation.ruleId)
-    if (existingIds.has(nodeId)) continue
+    if (existingIds.has(nodeId)) {
+      // Refresh provenance: the closure may now support this fact via a
+      // DIFFERENT derivation (e.g. the original source was consumed by an
+      // action while an alternative rule still holds). Stale evidenceRefs
+      // pointing at archived sources would hide the fact from the board -
+      // usability cascades along the evidence chain (external review P1).
+      const fresh = [derivation.ruleId, ...derivation.sourceFactIds]
+      const node = nodesById.get(nodeId)
+      if (
+        node &&
+        (node.evidenceRefs.length !== fresh.length ||
+          node.evidenceRefs.some((ref, i) => ref !== fresh[i]))
+      ) {
+        store.updateNode(spaceId, nodeId, { evidenceRefs: fresh })
+      }
+      continue
+    }
 
     const rule = ruleById.get(derivation.ruleId)
     const fact = store.addNode(spaceId, {

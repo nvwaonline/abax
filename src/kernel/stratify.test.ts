@@ -115,7 +115,7 @@ describe('evaluateStratifiedClosure', () => {
     assert.equal(result.derivations.length, 2)
     const last = result.derivations.find((derivation) => derivation.atom.predicate === 'c')
     assert.equal(last?.ruleId, 'AX2')
-    assert.deepEqual(last?.sourceFactIds, ['derived:b|item:thing'])
+    assert.deepEqual(last?.sourceFactIds, ['derived:b|item:"thing"'])
   })
 })
 

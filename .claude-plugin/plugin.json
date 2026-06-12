@@ -7,11 +7,23 @@
     "email": "jiqun.qi@gmail.com"
   },
   "license": "MIT",
-  "keywords": ["reasoning", "verification", "datalog", "working-memory", "audit", "provenance", "mcp"],
+  "keywords": [
+    "reasoning",
+    "verification",
+    "datalog",
+    "working-memory",
+    "audit",
+    "provenance",
+    "mcp"
+  ],
   "mcpServers": {
     "abax": {
       "command": "npx",
-      "args": ["-y", "abax-mcp"]
+      "args": [
+        "-y",
+        "abax-mcp"
+      ]
     }
-  }
+  },
+  "version": "0.2.0"
 }

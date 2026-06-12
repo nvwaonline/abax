@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { atomEquals, instantiateAtom, matchRule } from './predicate.js'
+import { atomEquals, atomKey, instantiateAtom, matchRule } from './predicate.js'
 
 describe('predicate kernel', () => {
   it('compares atoms by predicate, negation, and sorted args', () => {
@@ -111,6 +111,74 @@ describe('predicate kernel', () => {
     assert.deepEqual(
       instantiateAtom({ predicate: 'answer', args: { value: '?known' } }, { known: 'walk' }),
       { predicate: 'answer', args: { value: 'walk' }, negated: undefined },
+    )
+  })
+
+
+  it('atom identity is type-aware: true vs "true" and 1 vs "1" are different atoms', () => {
+    // External review P1: String(value) keys collapsed types, so a goal
+    // wanting p(x=true) was satisfied by asserting p(x="true").
+    assert.equal(
+      atomEquals(
+        { predicate: 'p', args: { x: true } },
+        { predicate: 'p', args: { x: 'true' } },
+      ),
+      false,
+    )
+    assert.notEqual(
+      atomKey({ predicate: 'p', args: { x: 1 } }),
+      atomKey({ predicate: 'p', args: { x: '1' } }),
+    )
+  })
+
+  it('caps cross-product joins with a teaching error instead of exploding memory', () => {
+    // Real incident (2026-06-12 mtp bench): a sum rule whose cost atoms
+    // all used fresh variables - 8 atoms x 8 facts = 8^8 = 16.7M binding
+    // objects, V8 heap death at 4GB. Here 9 facts x 6 fresh-var atoms
+    // (9^6 = 531k) must trip the cap, not "succeed".
+    const facts = Array.from({ length: 9 }, (_, k) => ({
+      id: `F${k}`,
+      atom: { predicate: 'cost', args: { item: `item_${k}`, total: k } },
+    }))
+    const when = Array.from({ length: 6 }, (_, j) => ({
+      predicate: 'cost',
+      args: { item: `?i${j}`, total: `?t${j}` },
+    }))
+    assert.throws(
+      () =>
+        matchRule(
+          { id: 'ax_boom', when, then: [{ predicate: 'x', args: { a: '?t0' } }] },
+          facts,
+        ),
+      /cross product|pin identifying|join explosion/i,
+    )
+  })
+
+  it('pinned and variable-sharing joins stay under the cap', () => {
+    const facts = Array.from({ length: 9 }, (_, k) => ({
+      id: `F${k}`,
+      atom: { predicate: 'cost', args: { item: `item_${k}`, total: k } },
+    }))
+    // Pinned: each atom names its item - exactly one path through the join.
+    const pinned = Array.from({ length: 6 }, (_, j) => ({
+      predicate: 'cost',
+      args: { item: `item_${j}`, total: `?t${j}` },
+    }))
+    const matches = matchRule(
+      { id: 'ax_ok', when: pinned, then: [{ predicate: 'x', args: { a: '?t0' } }] },
+      facts,
+    )
+    assert.equal(matches.length, 1)
+
+    // Shared variable: matches stay linked instead of multiplying.
+    const linked = [
+      { predicate: 'cost', args: { item: '?i', total: '?t' } },
+      { predicate: 'cost', args: { item: '?i', total: '?t' } },
+    ]
+    assert.equal(
+      matchRule({ id: 'ax_link', when: linked, then: [{ predicate: 'y', args: { v: '?t' } }] }, facts)
+        .length,
+      9,
     )
   })
 })

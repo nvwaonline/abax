@@ -340,7 +340,7 @@ describe('pattern hypotheses and disputed taint', () => {
         { op: 'assert_fact', id: 'F_POS', predicate: 'a', args: { item: 'one' } },
         { op: 'assert_fact', id: 'F_NEG', predicate: 'a', args: { item: 'one' }, negated: true },
         { op: 'assert_fact', id: 'F_OK', predicate: 'a', args: { item: 'two' } },
-        { op: 'record_result', id: 'R1', label: 'Rests on b(one)', summary: 'x', evidenceRefs: ['derived:b|item:one'] },
+        { op: 'record_result', id: 'R1', label: 'Rests on b(one)', summary: 'x', evidenceRefs: ['derived:b|item:"one"'] },
       ],
       { format: 'text' },
     )
@@ -349,10 +349,10 @@ describe('pattern hypotheses and disputed taint', () => {
     // Both sides of the contradiction and the derived b(one) are disputed.
     assert.equal(byId.get('F_POS')?.disputed, true)
     assert.equal(byId.get('F_NEG')?.disputed, true)
-    assert.equal(byId.get('derived:b|item:one')?.disputed, true)
+    assert.equal(byId.get('derived:b|item:"one"')?.disputed, true)
     // The untouched branch is clean.
     assert.equal(byId.get('F_OK')?.disputed, undefined)
-    assert.equal(byId.get('derived:b|item:two')?.disputed, undefined)
+    assert.equal(byId.get('derived:b|item:"two"')?.disputed, undefined)
     // The result resting on the disputed derivation is disputed too.
     assert.equal(result.workingMemory.results[0]?.disputed, true)
     assert.match(result.workingMemoryText ?? '', /b\(item=one\) \[derived\] \[disputed\]/)
@@ -787,5 +787,57 @@ describe('vacuous rule warnings', () => {
       },
     ])
     assert.equal(result.warnings.some((w) => /vacuous/.test(w)), false)
+  })
+})
+
+describe('provenance cannot be forged (external review P0)', () => {
+  it('rejects assert_fact carrying a reserved provenance summary', () => {
+    const store = new MemorySpaceStore()
+    const space = store.createSpace({ title: 'forge: summary' })
+    assert.throws(
+      () =>
+        applyWorkingMemoryOperations(store, space.id, [
+          {
+            op: 'assert_fact',
+            id: 'F1',
+            predicate: 'finding',
+            args: { kind: 'fake' },
+            summary: 'Rule-derived fact: finding(kind=fake)',
+          },
+        ]),
+      /reserved provenance|assigns provenance/i,
+    )
+    assert.equal(store.listNodes(space.id).length, 0)
+  })
+
+  it('rejects assert_fact carrying a derived: node id', () => {
+    const store = new MemorySpaceStore()
+    const space = store.createSpace({ title: 'forge: id' })
+    assert.throws(
+      () =>
+        applyWorkingMemoryOperations(store, space.id, [
+          {
+            op: 'assert_fact',
+            id: 'derived:finding|kind:"fake"',
+            predicate: 'finding',
+            args: { kind: 'fake' },
+          },
+        ]),
+      /reserved id prefix|derived:/i,
+    )
+  })
+})
+
+describe('assert_fact validation (external review P2)', () => {
+  it('rejects assert_fact without a predicate instead of minting an undefined() fact', () => {
+    const store = new MemorySpaceStore()
+    const space = store.createSpace({ title: 'no predicate' })
+    assert.throws(
+      () =>
+        applyWorkingMemoryOperations(store, space.id, [
+          { op: 'assert_fact', id: 'F1', args: { x: 1 } } as never,
+        ]),
+      /predicate/i,
+    )
   })
 })

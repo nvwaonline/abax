@@ -28,7 +28,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { MemorySpaceStore } from '../storage/memory-space-store.js'
-import { getLogicContext } from '../engine/logic-context.js'
+import { formatLogicContextAsText, getLogicContext } from '../engine/logic-context.js'
 import { runAgentTask, type ChatModel } from '../agent/task-loop.js'
 import { ToolRegistry } from '../agent/tools.js'
 import { LlmClient, type ChatMessage } from '../agent/llm.js'
@@ -138,6 +138,18 @@ type BoardScore = {
   totalDerived: boolean
   /** A fact with the right number exists but only as a bare assertion. */
   totalAssertedOnly: boolean
+  /** Final board text, attached ONLY on failure (post-mortem evidence). */
+  boardDump?: string
+  /** Raw per-turn model replies, only when GALAXY_BENCH_TRANSCRIPT=1. */
+  transcript?: string[]
+  /** Set when the arm died mid-task (turn-level budget exhaustion etc.). */
+  dnfError?: string
+}
+
+const WANT_TRANSCRIPT = (): boolean => process.env.GALAXY_BENCH_TRANSCRIPT === '1'
+
+function capReply(reply: string, cap = 4000): string {
+  return reply.length > cap ? `${reply.slice(0, cap)} ...[+${reply.length - cap} chars]` : reply
 }
 
 function scoreBoard(store: MemorySpaceStore, spaceId: string, p: Problem): BoardScore {
@@ -176,21 +188,75 @@ async function runBoardArm(
   const store = new MemorySpaceStore()
   let spaceId = ''
   let turns = 0
-  await runAgentTask({
-    store,
-    llm,
-    reg: new ToolRegistry(),
-    rootDir: process.cwd(),
-    goal: boardGoal(p),
-    maxTurns,
-    onContext: (info) => {
-      spaceId = info.spaceId
+  const transcript: string[] = []
+  // ONE timed-out turn is absorbed (real P5: a single runaway generation
+  // killed the whole arm at 991s). The loop's parse-failure nudge keeps
+  // the task alive; a second budget death aborts for real.
+  let budgetDeaths = 0
+  const isBudgetShaped = (error: unknown): boolean =>
+    (error as { name?: string } | null)?.name === 'TimeoutError' ||
+    /stream cap exceeded/i.test(String(error))
+  const tolerant: ChatModel = {
+    chat: async (messages) => {
+      try {
+        return await llm.chat(messages)
+      } catch (error) {
+        if (isBudgetShaped(error) && budgetDeaths === 0) {
+          budgetDeaths = 1
+          console.error(`[p${p.id}] board turn timed out - tolerated once, nudging`)
+          return (
+            'TURN BUDGET EXCEEDED - the previous generation never finished ' +
+            '(repetition loop?). Reply now with ONE SMALL JSON tool call.'
+          )
+        }
+        throw error
+      }
     },
-    onTurn: () => {
-      turns += 1
-    },
-  })
-  return { ...scoreBoard(store, spaceId, p), turns }
+  }
+  const tapped: ChatModel = WANT_TRANSCRIPT()
+    ? {
+        chat: async (messages) => {
+          const reply = await tolerant.chat(messages)
+          transcript.push(capReply(reply))
+          return reply
+        },
+      }
+    : tolerant
+  let dnfError: string | undefined
+  try {
+    await runAgentTask({
+      store,
+      llm: tapped,
+      reg: new ToolRegistry(),
+      rootDir: process.cwd(),
+      goal: boardGoal(p),
+      maxTurns,
+      onContext: (info) => {
+        spaceId = info.spaceId
+      },
+      onTurn: () => {
+        turns += 1
+        console.error(`[p${p.id}] board turn ${turns}`)
+      },
+    })
+  } catch (error) {
+    // Crash forensics (real P5): score whatever the board already holds
+    // instead of throwing the evidence away with the exception.
+    dnfError = String(error).slice(0, 160)
+  }
+  const score = scoreBoard(store, spaceId, p)
+  if (dnfError !== undefined) {
+    score.ok = false
+    score.dnfError = dnfError
+  }
+  if (!score.ok) {
+    // Keep the evidence: without the board itself, a failure row cannot be
+    // post-mortemed (learned from the 2026-06-12 run, problem 3). Capped so
+    // a pathological board cannot flood the JSONL log.
+    score.boardDump = formatLogicContextAsText(getLogicContext(store, spaceId)).slice(0, 6000)
+  }
+  if (WANT_TRANSCRIPT()) score.transcript = transcript
+  return { ...score, turns }
 }
 
 // ---------------------------------------------------------------- selftest
@@ -263,6 +329,100 @@ class ScriptedBoardModel implements ChatModel {
   }
 }
 
+/** Shared first-turn ops: line facts + cost rule (+ optionally the sum rule). */
+function buildModelingCall(p: Problem, includeTotalRule: boolean): string {
+  const ops: unknown[] = p.lines.map((l, i) => ({
+    op: 'assert_fact',
+    id: `L${i}`,
+    predicate: 'line',
+    args: { item: l.item, unit: l.unit, qty: l.qty },
+  }))
+  ops.push({
+    op: 'add_axiom',
+    id: 'ax_cost',
+    label: 'cost = unit*qty',
+    when: [
+      { predicate: 'line', args: { item: '?i', unit: '?u', qty: '?q' } },
+      { predicate: 'mul', args: { left: '?u', right: '?q', result: '?t' } },
+    ],
+    then: [{ predicate: 'cost', args: { item: '?i', total: '?t' } }],
+  })
+  if (includeTotalRule) {
+    const when: unknown[] = []
+    const costVars = p.lines.map((l, i) => {
+      when.push({ predicate: 'cost', args: { item: l.item, total: `?c${i}` } })
+      return `?c${i}`
+    })
+    let acc = costVars[0]!
+    for (let i = 1; i < costVars.length; i += 1) {
+      const next = i === costVars.length - 1 ? '?sum' : `?s${i}`
+      when.push({ predicate: 'add', args: { left: acc, right: costVars[i]!, result: next } })
+      acc = next
+    }
+    ops.push({
+      op: 'add_axiom',
+      id: 'ax_total',
+      label: 'grand total = sum of costs',
+      when,
+      then: [{ predicate: 'grand_total', args: { value: costVars.length === 1 ? costVars[0]! : '?sum' } }],
+    })
+  }
+  return JSON.stringify({ tool: 'update_working_memory', args: { operations: ops }, note: 'model the invoice' })
+}
+
+/**
+ * Scripted model that derives every line cost but never sums - the
+ * failure shape of real run 2026-06-12 problem 3 (lineHits full,
+ * totalDerived false). Exists to pin the forensics contract: a failed
+ * board arm must come back with a board dump for post-mortems.
+ */
+class StallingModel implements ChatModel {
+  private step = 0
+  constructor(private readonly p: Problem) {}
+
+  async chat(_messages: ChatMessage[]): Promise<string> {
+    this.step += 1
+    if (this.step === 1) return buildModelingCall(this.p, false)
+    return JSON.stringify({ tool: 'done', args: { summary: 'leaving without the total' } })
+  }
+}
+
+/**
+ * Models the lines, then every later turn times out - the failure shape
+ * of real run 2026-06-12 problem 5 (board arm died mid-task at 991s).
+ * Pins the crash-forensics contract: a turn-level budget death must
+ * still score the partial board and carry the dump.
+ */
+class TimeoutAfterModelingModel implements ChatModel {
+  private step = 0
+  constructor(private readonly p: Problem) {}
+
+  async chat(_messages: ChatMessage[]): Promise<string> {
+    this.step += 1
+    if (this.step === 1) return buildModelingCall(this.p, false)
+    throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+  }
+}
+
+/** Times out ONCE mid-task, then finishes properly - tolerance must let it. */
+class RecoversAfterTimeoutModel implements ChatModel {
+  private step = 0
+  constructor(private readonly p: Problem) {}
+
+  async chat(_messages: ChatMessage[]): Promise<string> {
+    this.step += 1
+    if (this.step === 1) return buildModelingCall(this.p, true)
+    if (this.step === 2) throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+    if (this.step === 3) {
+      return JSON.stringify({
+        tool: 'update_working_memory',
+        args: { operations: [{ op: 'record_result', id: 'res', label: 'totals derived', summary: 'derived after a hiccup' }] },
+      })
+    }
+    return JSON.stringify({ tool: 'done', args: { summary: 'recovered' } })
+  }
+}
+
 async function selftest(): Promise<void> {
   const rng = mulberry32(7)
   const p = generateProblem(rng, 1)
@@ -292,7 +452,67 @@ async function selftest(): Promise<void> {
     throw new Error('selftest: empty board must not score ok')
   }
 
-  console.log('bench-arith selftest PASSED (board arm scored from derived facts; parser + scorer sane)')
+  // Failure forensics: a failed board arm must carry the board itself.
+  const stalled = await runBoardArm(new StallingModel(p), p, 4)
+  if (stalled.ok) {
+    throw new Error('selftest: stalling model must not score ok')
+  }
+  if (
+    stalled.boardDump === undefined ||
+    !stalled.boardDump.includes('cost(') ||
+    stalled.boardDump.includes('grand_total(')
+  ) {
+    throw new Error(
+      `selftest: failed board arm must include a board dump showing derived costs and no grand_total (got: ${String(stalled.boardDump).slice(0, 200)})`,
+    )
+  }
+  const fine = await runBoardArm(new ScriptedBoardModel(p), p, 6)
+  if (fine.boardDump !== undefined) {
+    throw new Error('selftest: successful board arm must not carry a dump (log bloat)')
+  }
+  if (fine.transcript !== undefined) {
+    throw new Error('selftest: transcript must stay off unless GALAXY_BENCH_TRANSCRIPT=1')
+  }
+  process.env.GALAXY_BENCH_TRANSCRIPT = '1'
+  try {
+    const taped = await runBoardArm(new ScriptedBoardModel(p), p, 6)
+    if (!taped.transcript || taped.transcript.length < 2 || !taped.transcript[0]!.includes('add_axiom')) {
+      throw new Error(`selftest: transcript capture failed (got ${JSON.stringify(taped.transcript?.length)})`)
+    }
+  } finally {
+    delete process.env.GALAXY_BENCH_TRANSCRIPT
+  }
+
+  // Crash forensics (real P5): a turn-level budget death must not throw
+  // away the board - partial derivations scored, dump + error attached.
+  const crashed = await runBoardArm(new TimeoutAfterModelingModel(p), p, 6)
+  if (crashed.ok) {
+    throw new Error('selftest: crashed arm must not score ok')
+  }
+  if (!crashed.dnfError || !/timeout/i.test(crashed.dnfError)) {
+    throw new Error(`selftest: crash must record dnfError (got ${JSON.stringify(crashed.dnfError)})`)
+  }
+  if (!crashed.boardDump?.includes('cost(')) {
+    throw new Error('selftest: crash path must still dump the partial board')
+  }
+  if (crashed.lineHits !== crashed.lineCount) {
+    throw new Error('selftest: partial derivations must still be scored after a crash')
+  }
+
+  // Tolerance: ONE timed-out turn is absorbed (nudge + continue), so a
+  // model that recovers afterwards still solves the problem.
+  const recovered = await runBoardArm(new RecoversAfterTimeoutModel(p), p, 8)
+  if (!recovered.ok || recovered.dnfError !== undefined) {
+    throw new Error(
+      `selftest: one tolerated timeout should still allow a full solve (got ${JSON.stringify({
+        ok: recovered.ok,
+        dnfError: recovered.dnfError,
+        totalDerived: recovered.totalDerived,
+      })})`,
+    )
+  }
+
+  console.log('bench-arith selftest PASSED (board arm scored from derived facts; parser + scorer + failure dump sane)')
 }
 
 // ---------------------------------------------------------------- main
@@ -317,6 +537,27 @@ async function main(): Promise<void> {
   mkdirSync('logs', { recursive: true })
   const logPath = join('logs', `bench-arith-${Date.now()}.jsonl`)
   const log = (entry: unknown): void => appendFileSync(logPath, `${JSON.stringify(entry)}\n`)
+  // Attribution header: model identity from env, not from any UI banner
+  // (lesson of validation #27 - environment labels are assertions too).
+  log({
+    type: 'config',
+    bench: 'arith',
+    startedAt: new Date().toISOString(),
+    model: process.env.GALAXY_LLM_MODEL ?? '(client default: local-model)',
+    note: process.env.GALAXY_BENCH_NOTE,
+    baseUrl: process.env.GALAXY_LLM_BASE_URL ?? '(client default: http://127.0.0.1:1234)',
+    stream: process.env.GALAXY_LLM_STREAM !== '0',
+    timeoutMs: Number(process.env.GALAXY_LLM_TIMEOUT_MS ?? 180000),
+    maxTokens: Number(process.env.GALAXY_MAX_TOKENS ?? 8000),
+    arm,
+    seed,
+    n: N,
+    skip,
+    maxTurns,
+    unitDigits: UNIT_DIGITS,
+    qtyDigits: QTY_DIGITS,
+    lines: `${MIN_LINES}-${MAX_LINES}`,
+  })
 
   let baseOk = 0
   let baseDnf = 0
@@ -332,12 +573,18 @@ async function main(): Promise<void> {
     // DNF (did not finish) - recorded as failure, never a crashed run.
     if (arm !== 'board') {
       const t0 = Date.now()
+      console.error(`[p${p.id}] baseline arm started`)
       try {
         const reply = await llm.chat(baselineMessages(p))
         const answer = parseBaselineAnswer(reply)
         const ok = answer === p.total
         if (ok) baseOk += 1
-        row.baseline = { ok, answer, ms: Date.now() - t0 }
+        row.baseline = {
+          ok,
+          answer,
+          ms: Date.now() - t0,
+          ...(WANT_TRANSCRIPT() ? { reply: capReply(reply, 6000) } : {}),
+        }
       } catch (error) {
         baseDnf += 1
         row.baseline = { ok: false, dnf: true, error: String(error).slice(0, 120), ms: Date.now() - t0 }
@@ -346,6 +593,7 @@ async function main(): Promise<void> {
 
     if (arm !== 'baseline') {
       const t0 = Date.now()
+      console.error(`[p${p.id}] board arm started`)
       try {
         const score = await runBoardArm(llm, p, maxTurns)
         if (score.ok) boardOk += 1

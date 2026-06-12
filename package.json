@@ -1,7 +1,7 @@
 {
   "name": "abax",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "An external reasoning board for LLM agents. Derived or it didn't happen. (npm package: abax-mcp)",
   "license": "MIT",

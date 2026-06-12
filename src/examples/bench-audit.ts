@@ -298,6 +298,24 @@ async function main(): Promise<void> {
   mkdirSync('logs', { recursive: true })
   const logPath = join('logs', `bench-audit-${Date.now()}.jsonl`)
   const log = (entry: unknown): void => appendFileSync(logPath, `${JSON.stringify(entry)}\n`)
+  // Attribution header: model identity from env, not from any UI banner
+  // (lesson of validation #27 - environment labels are assertions too).
+  log({
+    type: 'config',
+    bench: 'audit',
+    startedAt: new Date().toISOString(),
+    model: process.env.GALAXY_LLM_MODEL ?? '(client default: local-model)',
+    note: process.env.GALAXY_BENCH_NOTE,
+    baseUrl: process.env.GALAXY_LLM_BASE_URL ?? '(client default: http://127.0.0.1:1234)',
+    stream: process.env.GALAXY_LLM_STREAM !== '0',
+    timeoutMs: Number(process.env.GALAXY_LLM_TIMEOUT_MS ?? 180000),
+    maxTokens: Number(process.env.GALAXY_MAX_TOKENS ?? 8000),
+    arm,
+    seed,
+    n: N,
+    skip,
+    maxTurns,
+  })
 
   const ran = problems.length
   let baseOk = 0
