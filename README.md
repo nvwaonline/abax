@@ -12,9 +12,9 @@ result: every claim on the board is **derived** (closure-backed), an
 that rest on bare claims are rejected.
 
 > First run through the published package, a 27B local model driving the
-> board from Claude Code: the frontier model supervising the release had
-> mentally computed `9381274 × 6473` and confidently repeated the wrong
-> answer three times. The board derived the right one. That incident is
+> board from Claude Code: the frontier model supervising the release
+> (Claude Fable 5 Max) had mentally computed `9381274 × 6473` and
+> confidently repeated the wrong answer three times. The board derived the right one. That incident is
 > [validation round #27](docs/real-task-log.md) — the product demoing
 > itself on its own author.
 
